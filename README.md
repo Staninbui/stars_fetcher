@@ -52,8 +52,3 @@ serde-rs/serde
 ```sh
 stars_fetcher -f repos.txt
 ```
-
-## 声明
-
-（本项目纯用AI生成，仅轻微调试代码和校验测试结果， 仅供娱乐）
-
