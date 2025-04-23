@@ -8,7 +8,7 @@ use crate::api::client::GitHubClient;
 use serde::{Deserialize, Serialize};
 use reqwest::StatusCode;
 
-trait Repo {
+pub trait Repo {
     async fn get_repo(&self, owner: &str, repo: &str) -> Result<RepoResponse, Box<dyn Error>>;
     async fn list_repos(&self) -> Result<Vec<RepoResponse>, Box<dyn Error>>;
     async fn get_repo_details(&self, owner: &str, repo: &str) -> Result<RepoDetailsResponse, Box<dyn Error>>;
@@ -92,9 +92,8 @@ impl Repo for GitHubClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
     use serde_json::json;
-    use mockito::{Server, Matcher};
+    use mockito::Server;
 
     #[tokio::test]
     async fn test_get_repo() {
@@ -133,6 +132,159 @@ mod tests {
         assert_eq!(repo.stars, 80);
 
         // Verify that the mock was called
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_get_repo_not_found() {
+        let mut server = Server::new_async().await;
+
+        let mock = server
+            .mock("GET", "/repos/octocat/not-found")
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let client = GitHubClient::new(
+            server.url().to_string(),
+            "test_token".to_string()
+        ).await;
+
+        let result = client.get_repo("octocat", "not-found").await;
+
+        assert!(result.is_err());
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_list_repos() {
+        let mut server = Server::new_async().await;
+
+        let mock = server
+            .mock("GET", "/user/starred")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!([
+                {
+                    "id": 1,
+                    "name": "repo1",
+                    "owner": {
+                        "login": "user1"
+                    },
+                    "stargazers_count": 10
+                },
+                {
+                    "id": 2,
+                    "name": "repo2",
+                    "owner": {
+                        "login": "user2"
+                    },
+                    "stargazers_count": 20
+                }
+            ]).to_string())
+            .create_async()
+            .await;
+
+        let client = GitHubClient::new(
+            server.url().to_string(),
+            "test_token".to_string()
+        ).await;
+
+        let result = client.list_repos().await;
+
+        assert!(result.is_ok());
+        let repos = result.unwrap();
+        assert_eq!(repos.len(), 2);
+        assert_eq!(repos[0].id, 1);
+        assert_eq!(repos[0].name, "repo1");
+        assert_eq!(repos[0].owner.login, "user1");
+        assert_eq!(repos[0].stars, 10);
+        assert_eq!(repos[1].id, 2);
+        assert_eq!(repos[1].name, "repo2");
+        assert_eq!(repos[1].stars, 20);
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_list_repos_error() {
+        let mut server = Server::new_async().await;
+
+        let mock = server
+            .mock("GET", "/user/starred")
+            .with_status(401)
+            .create_async()
+            .await;
+
+        let client = GitHubClient::new(
+            server.url().to_string(),
+            "invalid_token".to_string()
+        ).await;
+
+        let result = client.list_repos().await;
+
+        assert!(result.is_err());
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_get_repo_details() {
+        let mut server = Server::new_async().await;
+
+        let mock = server
+            .mock("GET", "/repos/octocat/hello-world")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!({
+                "id": 1296269,
+                "name": "hello-world",
+                "owner": {
+                    "login": "octocat"
+                },
+                "stargazers_count": 80,
+                "description": "My first repository",
+                "html_url": "https://github.com/octocat/hello-world"
+            }).to_string())
+            .create_async()
+            .await;
+
+        let client = GitHubClient::new(
+            server.url().to_string(),
+            "test_token".to_string()
+        ).await;
+
+        let result = client.get_repo_details("octocat", "hello-world").await;
+
+        assert!(result.is_ok());
+        let details = result.unwrap();
+        assert_eq!(details.id, 1296269);
+        assert_eq!(details.name, "hello-world");
+        assert_eq!(details.owner.login, "octocat");
+        assert_eq!(details.stars, 80);
+        assert_eq!(details.description, Some("My first repository".to_string()));
+        assert_eq!(details.html_url, "https://github.com/octocat/hello-world");
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_get_repo_details_not_found() {
+        let mut server = Server::new_async().await;
+
+        let mock = server
+            .mock("GET", "/repos/octocat/not-found")
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let client = GitHubClient::new(
+            server.url().to_string(),
+            "test_token".to_string()
+        ).await;
+
+        let result = client.get_repo_details("octocat", "not-found").await;
+
+        assert!(result.is_err());
         mock.assert_async().await;
     }
 }
