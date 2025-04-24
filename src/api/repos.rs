@@ -3,7 +3,7 @@
 /// This module contains functions to get, list, get details of repositories, star, and unstar repositories.
 ///
 
-use std::error::Error;
+use std::{error::Error, path::Path, fs, io::Write, process::Command};
 use crate::api::client::GitHubClient;
 use serde::{Deserialize, Serialize};
 use reqwest::StatusCode;
@@ -12,6 +12,7 @@ pub trait Repo {
     async fn get_repo(&self, owner: &str, repo: &str) -> Result<RepoResponse, Box<dyn Error>>;
     async fn list_repos(&self) -> Result<Vec<RepoResponse>, Box<dyn Error>>;
     async fn get_repo_details(&self, owner: &str, repo: &str) -> Result<RepoDetailsResponse, Box<dyn Error>>;
+    async fn download_repo(&self, owner: &str, repo: &str, path: Option<&Path>) -> Result<String, Box<dyn Error>>;
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -87,6 +88,55 @@ impl Repo for GitHubClient {
             Err("Failed to fetch repository details".into())
         }
     }
+
+    async fn download_repo(&self, owner: &str, repo: &str, path: Option<&Path>) -> Result<String, Box<dyn Error>> {
+        // Use the default download path if none is specified
+        let download_path = match path {
+            Some(p) => p.to_path_buf(),
+            None => {
+                let mut default_path = std::env::current_dir()?;
+                default_path.push(format!("{}-{}", owner, repo));
+                default_path
+            }
+        };
+
+        // Convert the path to a string for display
+        let download_location = download_path.to_string_lossy().to_string();
+
+        // First, check if git is installed
+        if Command::new("git").arg("--version").output().is_err() {
+            return Err("Git is not installed or not available in PATH".into());
+        }
+
+        // If the directory already exists, ask if we should remove it (in a real app)
+        if download_path.exists() {
+            fs::remove_dir_all(&download_path)?;
+        }
+
+        // Create parent directories if they don't exist
+        if let Some(parent) = download_path.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+
+        // Clone the repository
+        let repo_url = format!("https://github.com/{}/{}.git", owner, repo);
+        let output = Command::new("git")
+            .arg("clone")
+            .arg(&repo_url)
+            .arg(&download_path)
+            .output()?;
+
+        // Check if the command was successful
+        if !output.status.success() {
+            let error_message = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Failed to clone repository: {}", error_message).into());
+        }
+
+        // Return the path where the repository was downloaded
+        Ok(download_location)
+    }
 }
 
 #[cfg(test)]
@@ -94,6 +144,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use mockito::Server;
+    use tempfile::tempdir;
 
     #[tokio::test]
     async fn test_get_repo() {
@@ -286,5 +337,40 @@ mod tests {
 
         assert!(result.is_err());
         mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_download_repo() {
+        // Skip this test if git is not installed
+        if Command::new("git").arg("--version").output().is_err() {
+            eprintln!("Git is not installed, skipping test_download_repo");
+            return;
+        }
+
+        // Create a temporary directory for the test
+        let temp_dir = tempdir().unwrap();
+        let temp_path = temp_dir.path();
+
+        // Create a client that will use the real GitHub API
+        // For a real test we might want to mock this, but using a real, small repo works too
+        let client = GitHubClient::new(
+            "https://api.github.com".to_string(),
+            "".to_string() // Anonymous access for public repos
+        ).await;
+
+        // Try to download a small public repository
+        let test_owner = "octocat";
+        let test_repo = "Hello-World"; // Known small test repo
+
+        let result = client.download_repo(test_owner, test_repo, Some(temp_path)).await;
+
+        if result.is_err() {
+            println!("Download error: {:?}", result);
+        }
+
+        // Check that the file was downloaded correctly
+        let readme_path = temp_path.join("README.md");
+        assert!(result.is_ok());
+        assert!(readme_path.exists(), "README.md should exist in the cloned repository");
     }
 }
