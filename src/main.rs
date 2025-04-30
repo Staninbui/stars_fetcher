@@ -4,6 +4,8 @@ use reqwest::{Client, header};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::env;
+use starts_fetcher::ui::selector::RepoSelector;
+
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Repo {
