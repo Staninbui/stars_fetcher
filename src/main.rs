@@ -1,4 +1,5 @@
 use clap::{App, Arg, SubCommand};
+use console::{Key, Term};
 use dialoguer::{theme::ColorfulTheme, Select};
 use prettytable::{Table, row, cell};
 use reqwest::{Client, header};
@@ -61,7 +62,14 @@ fn show_help() {
     println!("  star <owner> <repo>     - Star a repository");
     println!("  unstar <owner> <repo>   - Unstar a repository");
     println!("  detail <owner> <repo>   - Get detailed information about a repository");
-    println!("  --interactive           - Launch interactive mode with menu selection");
+    println!("  --interactive           - Launch interactive mode with a keyboard-driven menu");
+    println!("");
+    println!("Interactive Mode Controls:");
+    println!("  1/l: List starred repositories");
+    println!("  2/g: Get repository details");
+    println!("  3/s: Star a repository");
+    println!("  4/u: Unstar a repository");
+    println!("  q/Esc: Quit interactive mode");
     println!("");
     println!("Example usage:");
     println!("  github-cli list");
@@ -72,97 +80,109 @@ fn show_help() {
 
 // Interactive mode showing menu options
 async fn interactive_mode(client: &Client) -> Result<(), Box<dyn Error>> {
-    let items = vec![
-        "List starred repositories",
-        "Get repository details",
-        "Star a repository",
-        "Unstar a repository",
-        "Exit",
-    ];
+    let term = Term::stdout();
+    loop {
+        term.clear_screen()?;
+        println!("Interactive Mode - GitHub CLI");
+        println!("-----------------------------");
+        println!("1/l: List starred repositories");
+        println!("2/g: Get repository details");
+        println!("3/s: Star a repository");
+        println!("4/u: Unstar a repository");
+        println!("q/Esc: Quit");
+        println!("-----------------------------");
+        print!("Select action: ");
 
-    let selection = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("Select action")
-        .default(0)
-        .items(&items)
-        .interact()?;
+        match term.read_key()? {
+            Key::Char('1') | Key::Char('l') => {
+                // List repositories
+                let repos = list_repos(client).await?;
+                println!("Found {} starred repositories", repos.len());
 
-    match selection {
-        0 => {
-            // List repositories
-            let repos = list_repos(client).await?;
-            println!("Found {} starred repositories", repos.len());
+                // Convert to Value objects for the selector
+                let repos_json = convert_repos_to_values(repos).await;
 
-            // Convert to Value objects for the selector
-            let repos_json = convert_repos_to_values(repos).await;
-
-            if let Some(selected) = RepoSelector::select_repo(repos_json) {
-                println!("\nSelected repository:");
-                println!("Name: {}", selected["name"]);
-                println!("Full name: {}", selected["full_name"]);
-                println!("URL: {}", selected["html_url"]);
-                if let Some(desc) = selected["description"].as_str() {
-                    println!("Description: {}", desc);
+                if let Some(selected) = RepoSelector::select_repo(repos_json) {
+                    println!("\nSelected repository:");
+                    println!("Name: {}", selected["name"]);
+                    println!("Full name: {}", selected["full_name"]);
+                    println!("URL: {}", selected["html_url"]);
+                    if let Some(desc) = selected["description"].as_str() {
+                        println!("Description: {}", desc);
+                    }
                 }
+                println!("\nPress any key to continue...");
+                term.read_key()?;
             }
-        }
-        1 => {
-            // Get repository details (first list, then show details)
-            let repos = list_repos(client).await?;
-            let repos_json = convert_repos_to_values(repos).await;
+            Key::Char('2') | Key::Char('g') => {
+                // Get repository details (first list, then show details)
+                let repos = list_repos(client).await?;
+                let repos_json = convert_repos_to_values(repos).await;
 
-            if let Some(selected) = RepoSelector::select_repo(repos_json) {
-                let owner = selected["owner"]["login"].as_str().unwrap_or("unknown");
-                let repo_name = selected["name"].as_str().unwrap_or("unknown");
+                if let Some(selected) = RepoSelector::select_repo(repos_json) {
+                    let owner_val = selected.get("owner").and_then(|o| o.get("login")).and_then(|l| l.as_str()).unwrap_or("unknown");
+                    let repo_name_val = selected.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
 
-                let repo_details = get_repo_detail(client, owner, repo_name).await?;
-                let mut table = Table::new();
-                table.add_row(row!["ID", "Name", "Full Name", "Description", "URL"]);
-                table.add_row(row![
-                    repo_details.id,
-                    repo_details.name,
-                    repo_details.full_name,
-                    repo_details.description.unwrap_or_default(),
-                    repo_details.html_url
-                ]);
-                table.printstd();
+
+                    let repo_details = get_repo_detail(client, owner_val, repo_name_val).await?;
+                    let mut table = Table::new();
+                    table.add_row(row!["ID", "Name", "Full Name", "Description", "URL"]);
+                    table.add_row(row![
+                        repo_details.id,
+                        repo_details.name,
+                        repo_details.full_name,
+                        repo_details.description.unwrap_or_default(),
+                        repo_details.html_url
+                    ]);
+                    table.printstd();
+                }
+                println!("\nPress any key to continue...");
+                term.read_key()?;
             }
-        }
-        2 => {
-            // Star a repository - need manual input
-            println!("Enter repository owner:");
-            let mut owner = String::new();
-            std::io::stdin().read_line(&mut owner)?;
-            let owner = owner.trim();
+            Key::Char('3') | Key::Char('s') => {
+                // Star a repository - need manual input
+                term.write_line("Enter repository owner:")?;
+                let mut owner = String::new();
+                std::io::stdin().read_line(&mut owner)?;
+                let owner = owner.trim();
 
-            println!("Enter repository name:");
-            let mut repo_name = String::new();
-            std::io::stdin().read_line(&mut repo_name)?;
-            let repo_name = repo_name.trim();
+                term.write_line("Enter repository name:")?;
+                let mut repo_name = String::new();
+                std::io::stdin().read_line(&mut repo_name)?;
+                let repo_name = repo_name.trim();
 
-            star_repo(client, owner, repo_name).await?;
-            println!("Starred repository {}/{}", owner, repo_name);
-        }
-        3 => {
-            // Unstar a repository - select from currently starred
-            let repos = list_repos(client).await?;
-            let repos_json = convert_repos_to_values(repos).await;
-
-            if let Some(selected) = RepoSelector::select_repo(repos_json) {
-                let owner = selected["owner"]["login"].as_str().unwrap_or("unknown");
-                let repo_name = selected["name"].as_str().unwrap_or("unknown");
-
-                unstar_repo(client, owner, repo_name).await?;
-                println!("Unstarred repository {}/{}", owner, repo_name);
+                star_repo(client, owner, repo_name).await?;
+                println!("Starred repository {}/{}", owner, repo_name);
+                println!("\nPress any key to continue...");
+                term.read_key()?;
             }
-        }
-        4 | _ => {
-            println!("Exiting");
-            return Ok(());
+            Key::Char('4') | Key::Char('u') => {
+                // Unstar a repository - select from currently starred
+                let repos = list_repos(client).await?;
+                let repos_json = convert_repos_to_values(repos).await;
+
+                if let Some(selected) = RepoSelector::select_repo(repos_json) {
+                    let owner_val = selected.get("owner").and_then(|o| o.get("login")).and_then(|l| l.as_str()).unwrap_or("unknown");
+                    let repo_name_val = selected.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
+
+                    unstar_repo(client, owner_val, repo_name_val).await?;
+                    println!("Unstarred repository {}/{}", owner_val, repo_name_val);
+                }
+                println!("\nPress any key to continue...");
+                term.read_key()?;
+            }
+            Key::Char('q') | Key::Escape => {
+                println!("Exiting interactive mode.");
+                break;
+            }
+            _ => {
+                println!("Invalid input, please try again.");
+                println!("\nPress any key to continue...");
+                term.read_key()?;
+            }
         }
     }
-
-    // Recursively call interactive mode to keep the menu going
-    Box::pin(interactive_mode(client)).await
+    Ok(())
 }
 
 #[tokio::main]
